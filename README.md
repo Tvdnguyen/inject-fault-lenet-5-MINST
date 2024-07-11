@@ -7,6 +7,7 @@
 - [Installation](#installation)
 - [Data](#data)
 - [Usage](#usage)
+- [Reference](#reference)
 
 ## 🔥 Update
 - **July 2024**: We release 1st version of codebase.
@@ -61,3 +62,6 @@ To reproduce experiments, please refer:
 ## scripts/run.sh
 
 ```
+
+## Reference
+- [How to Quantize an MNIST network to 8 bits in Pytorch from scratch](https://karanbirchahal.medium.com/how-to-quantise-an-mnist-network-to-8-bits-in-pytorch-no-retraining-required-from-scratch-39f634ac8459)
