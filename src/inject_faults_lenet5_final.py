@@ -5,6 +5,7 @@ import torchvision.transforms as transforms
 import random
 import numpy as np
 
+
 # Định nghĩa mô hình LeNet-5
 class LeNet5(nn.Module):
     def __init__(self, num_classes):
@@ -13,18 +14,20 @@ class LeNet5(nn.Module):
             nn.Conv2d(1, 6, kernel_size=5, stride=1, padding=0),
             nn.BatchNorm2d(6),
             nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2))
+            nn.MaxPool2d(kernel_size=2, stride=2),
+        )
         self.layer2 = nn.Sequential(
             nn.Conv2d(6, 16, kernel_size=5, stride=1, padding=0),
             nn.BatchNorm2d(16),
             nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2))
+            nn.MaxPool2d(kernel_size=2, stride=2),
+        )
         self.fc = nn.Linear(400, 120)
         self.relu = nn.ReLU()
         self.fc1 = nn.Linear(120, 84)
         self.relu1 = nn.ReLU()
         self.fc2 = nn.Linear(84, num_classes)
-        
+
     def forward(self, x):
         out = self.layer1(x)
         out = self.layer2(out)
@@ -36,13 +39,15 @@ class LeNet5(nn.Module):
         out = self.fc2(out)
         return out
 
+
 # Hàm để lật bit
-#def flip_bit(value, bit):
+# def flip_bit(value, bit):
 #    int_value = np.int8(np.round(value * 127))  # Chuyển số thực sang định dạng 8-bit số nguyên dạng bù 2
 #    int_value ^= 1 << bit  # Lật bit
 #    return int_value / 127.0  # Chuyển lại thành số thực
 
-    # Hàm lật bit
+
+# Hàm lật bit
 def flip_bit(value, bit):
     # Chuyển đổi giá trị float thành số nguyên 8 bit và lật bit
     int_value = np.int8(value)
@@ -54,7 +59,9 @@ def flip_bit(value, bit):
 def inject_faults(model, bit_error_rate):
     weights = [p for p in model.parameters() if p.requires_grad]
     y = sum(p.numel() for p in weights)
-    x = int(bit_error_rate * y * 32)  # Tính số bit cần tiêm lỗi theo công thức m = x/(y*32)
+    x = int(
+        bit_error_rate * y * 32
+    )  # Tính số bit cần tiêm lỗi theo công thức m = x/(y*32)
     h = 10
 
     for _ in range(10):
@@ -80,30 +87,41 @@ def inject_faults(model, bit_error_rate):
             if weight_idx < len(weight_data):
                 weight_data[weight_idx] = flip_bit(weight_data[weight_idx], bit_idx)
 
-        weights[weight_index].data = torch.tensor(weight_data.reshape(weights[weight_index].shape), dtype=weights[weight_index].dtype).to(weights[weight_index].device)
+        weights[weight_index].data = torch.tensor(
+            weight_data.reshape(weights[weight_index].shape),
+            dtype=weights[weight_index].dtype,
+        ).to(weights[weight_index].device)
         h -= 1
 
     return model
 
-# Tải dữ liệu và tiền xử lý
-transform = transforms.Compose([
-    transforms.Resize((32, 32)),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=(0.1307,), std=(0.3081,))
-])
 
-test_dataset = torchvision.datasets.MNIST(root='./data', train=False, transform=transform, download=True)
-test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=64, shuffle=False)
+# Tải dữ liệu và tiền xử lý
+transform = transforms.Compose(
+    [
+        transforms.Resize((32, 32)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=(0.1307,), std=(0.3081,)),
+    ]
+)
+
+test_dataset = torchvision.datasets.MNIST(
+    root="./data", train=False, transform=transform, download=True
+)
+test_loader = torch.utils.data.DataLoader(
+    dataset=test_dataset, batch_size=64, shuffle=False
+)
 
 # Khởi tạo mô hình
 num_classes = 10
 model = LeNet5(num_classes)
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model.to(device)
 
 # Tải trọng số đã lưu
-model.load_state_dict(torch.load('lenet5_weights.pth'))
-print('Model weights loaded from lenet5_weights.pth')
+model.load_state_dict(torch.load("lenet5_weights.pth"))
+print("Model weights loaded from lenet5_weights.pth")
+
 
 # Đánh giá mô hình sau khi lượng tử hóa
 def evaluate_model(model):
@@ -120,8 +138,9 @@ def evaluate_model(model):
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
     accuracy = 100 * correct / total
-    print(f'Accuracy of the network after fault injection: {accuracy}%')
+    print(f"Accuracy of the network after fault injection: {accuracy}%")
     return accuracy
+
 
 # Tiến hành tiêm lỗi và đánh giá mô hình
 bit_error_rate = 0.0001  # Ví dụ tỉ lệ lỗi bit
@@ -129,12 +148,12 @@ results = []
 
 for _ in range(10):
     model_with_faults = LeNet5(num_classes).to(device)
-    model_with_faults.load_state_dict(torch.load('lenet5_weights.pth'))
+    model_with_faults.load_state_dict(torch.load("lenet5_weights.pth"))
     inject_faults(model_with_faults, bit_error_rate)
     accuracy = evaluate_model(model_with_faults)
     results.append(accuracy)
-    print(f'Iteration {_+1}, Bit Error Rate: {bit_error_rate}, Accuracy: {accuracy}%')
+    print(f"Iteration {_+1}, Bit Error Rate: {bit_error_rate}, Accuracy: {accuracy}%")
 
 # In ra kết quả cuối cùng
 average_accuracy = sum(results) / len(results)
-print(f'Average Accuracy after fault injection: {average_accuracy}%')
+print(f"Average Accuracy after fault injection: {average_accuracy}%")
