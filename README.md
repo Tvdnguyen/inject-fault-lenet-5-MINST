@@ -57,10 +57,18 @@ git checkout -b <yourGitName>/<yourFeatureName>
 
 - All relevant data is stored within the **/data** directory. To configure the settings for each dataset, corresponding configuration files are provided in the **/src/config** folder.
 
-To reproduce experiments, please refer:
+To reproduce experiments, please refer ```scripts/run.sh```:
 ```bash
-## scripts/run.sh
+export WORKDIR=./
+export PYTHONPATH="$WORKDIR:$PYTHONPATH"
+python src/train_model_lenet5_float.py          ## for training
+python src/quant.py                             ## for testing quantization
+```
 
+and run:
+
+```bash
+bash scripts/run.sh
 ```
 
 ## Reference
