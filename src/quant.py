@@ -190,7 +190,7 @@ def forward_quantize(model, x, stats):
 
 
 def test_quantize(model, test_loader, quant=False, stats=None):
-    device = "cuda"
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model.eval()
     test_loss = 0
@@ -220,3 +220,37 @@ def test_quantize(model, test_loader, quant=False, stats=None):
             100.0 * correct / len(test_loader.dataset),
         )
     )
+
+
+if __name__ == "__main__":
+    import copy
+    from torchvision import datasets
+    import torchvision.transforms as transforms
+    from src.model import LeNet5
+
+    num_classes = 10
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = LeNet5(num_classes).to(device)
+    ckpt_path = "./output/lenet5_weights.pth"
+
+    ckpt = torch.load(ckpt_path, map_location="cpu")
+    model.load_state_dict(ckpt)
+    q_model = copy.deepcopy(model)
+    kwargs = {"num_workers": 1, "pin_memory": True}
+    test_loader = torch.utils.data.DataLoader(
+        datasets.MNIST(
+            "./data",
+            train=False,
+            transform=transforms.Compose(
+                [
+                    transforms.Resize((32, 32)),
+                    transforms.ToTensor(),
+                    transforms.Normalize((0.1325,), (0.3105,)),
+                ]
+            ),
+        ),
+        batch_size=64,
+        shuffle=True,
+        **kwargs
+    )
+    test_quantize(q_model, test_loader, quant=False)
