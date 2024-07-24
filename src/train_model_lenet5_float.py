@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torchvision
 import torchvision.transforms as transforms
+import torch.nn.functional as F
 
 from src.model import LeNet5
 
@@ -68,8 +69,7 @@ for epoch in range(num_epochs):
 
         # Forward pass
         outputs = model(images)
-        loss = cost(outputs, labels)
-
+        loss = F.nll_loss(outputs, labels)
         # Backward and optimize
         optimizer.zero_grad()
         loss.backward()

@@ -111,24 +111,33 @@ def gather_act_stats(model, x, stats):
 
     stats = update_stats(x.clone().view(x.shape[0], -1), stats, "conv1")
 
-    x = F.relu(model.conv1(x))
+    x = model.conv1(x)
+    # n_chans = x.shape[1]
+    # running_mu = torch.zeros(n_chans) # zeros are fine for first training iter
+    # running_std = torch.ones(n_chans) # ones are fine for first training iter
+    # x = F.relu(F.batch_norm(x, running_mu, running_std, training=False, momentum=0.9))
 
     x = F.max_pool2d(x, 2, 2)
 
     stats = update_stats(x.clone().view(x.shape[0], -1), stats, "conv2")
 
-    x = F.relu(model.conv2(x))
+    x = model.conv2(x)
+    # n_chans = x.shape[1]
+    # running_mu = torch.zeros(n_chans) # zeros are fine for first training iter
+    # running_std = torch.ones(n_chans) # ones are fine for first training iter
+    # x = F.relu(F.batch_norm(x, running_mu, running_std, training=False, momentum=0.9))
 
     x = F.max_pool2d(x, 2, 2)
 
-    x = x.view(-1, 4 * 4 * 50)
+    x = x.view(-1, 5*5*16)
+
+    stats = update_stats(x, stats, "fc")
+    x = F.relu(model.fc(x))
 
     stats = update_stats(x, stats, "fc1")
-
     x = F.relu(model.fc1(x))
 
     stats = update_stats(x, stats, "fc2")
-
     x = model.fc2(x)
 
     return stats
@@ -136,11 +145,9 @@ def gather_act_stats(model, x, stats):
 
 # Entry function to get stats of all functions.
 def gather_stats(model, test_loader):
-    device = "cuda"
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model.eval()
-    test_loss = 0
-    correct = 0
     stats = {}
     with torch.no_grad():
         for data, target in test_loader:
@@ -164,16 +171,18 @@ def forward_quantize(model, x, stats):
     x, scale_next, zero_point_next = quantize_layer(
         x.tensor, model.conv1, stats["conv2"], x.scale, x.zero_point
     )
-
     x = F.max_pool2d(x, 2, 2)
 
     x, scale_next, zero_point_next = quantize_layer(
-        x, model.conv2, stats["fc1"], scale_next, zero_point_next
+        x, model.conv2, stats["fc"], scale_next, zero_point_next
     )
-
     x = F.max_pool2d(x, 2, 2)
 
-    x = x.view(-1, 4 * 4 * 50)
+    x = x.view(-1, 5*5*16)
+
+    x, scale_next, zero_point_next = quantize_layer(
+        x, model.fc, stats["fc1"], scale_next, zero_point_next
+    )
 
     x, scale_next, zero_point_next = quantize_layer(
         x, model.fc1, stats["fc2"], scale_next, zero_point_next
@@ -253,4 +262,5 @@ if __name__ == "__main__":
         shuffle=True,
         **kwargs
     )
-    test_quantize(q_model, test_loader, quant=False)
+    stats = gather_stats(q_model, test_loader)
+    test_quantize(q_model, test_loader, quant=True, stats=stats)
