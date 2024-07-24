@@ -120,12 +120,18 @@ def quantize_layer(x, layer, stat, scale_x, zp_x, num_faults):
 
     # Perform relu too
     x = F.relu(x)
-
+    
     # Reset weights for next forward pass
     layer.weight.data = W
     layer.bias.data = B
 
     return x, scale_next, zero_point_next
+
+def quant_feature(x, min_val, max_val):
+    # Add quantization after activation function
+    x = quantize_tensor(x, min_val=min_val, max_val=max_val)
+    x = dequantize_tensor(x)
+    return x
 
 ## Get Max and Min Stats for Quantising Activations of Network.
 # Get Min and max of x tensor, and stores it
@@ -225,6 +231,8 @@ def forward_quantize_fix(model, x, stats, fault_rate=0.0001):
     x, scale_next, zero_point_next = quantize_layer(
         quantized_x.tensor, model.conv1, stats["conv2"], quantized_x.scale, quantized_x.zero_point, faults_per_layer[0]
     )
+    x = quant_feature(x, min_val=stats["conv1"]["min"], max_val=stats["conv1"]["max"])
+    # print(f"x: {x.min(), x.max()} | quantized_x: {quantized_x.tensor.min(), quantized_x.tensor.max()}")
     x = F.max_pool2d(x, 2, 2)
 
     x, scale_next, zero_point_next = quantize_layer(
