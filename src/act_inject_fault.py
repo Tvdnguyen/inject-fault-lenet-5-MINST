@@ -56,6 +56,7 @@ def inject_weight_faults(weights, num_faults):
     return weights
 
 def inject_tensor_faults(tensor, num_faults):
+    # print(f"tensor: {tensor.scale, tensor.zero_point, tensor.tensor.min(), tensor.tensor.max()}")
     # Kiểm tra xem tensor có phải là QTensor và truy cập tensor thực tế
     if isinstance(tensor, QTensor):
         tensor = tensor.tensor  # Giả sử QTensor có trường 'tensor' là torch.Tensor
@@ -78,6 +79,7 @@ def inject_tensor_faults(tensor, num_faults):
 
     # Tạo lại tensor từ danh sách đã thay đổi và trả về định dạng ban đầu
     new_tensor = torch.tensor(tensor_flat, dtype=torch.uint8).view(tensor.shape)
+    # print(f"new_tensor: {new_tensor.min(), new_tensor.max()}")
     return new_tensor
 
 
@@ -151,8 +153,9 @@ def quantize_layer(x, layer, stat, scale_x, zp_x, num_faults):
 def quant_feature(x, min_val, max_val, num_faults):
     # Add quantization after activation function
     x = quantize_tensor(x, min_val=min_val, max_val=max_val)
-    x = inject_tensor_faults(x, num_faults)
-    #x = dequantize_tensor(x)
+    x_inj = inject_tensor_faults(x, num_faults)
+    x = QTensor(tensor=x_inj, scale=x.scale, zero_point=x.zero_point)
+    x = dequantize_tensor(x)
     return x
 
 ## Get Max and Min Stats for Quantising Activations of Network.
@@ -226,19 +229,19 @@ def forward_quantize_fix(model, x, stats, fault_rate=0):
     quantized_x = quantize_tensor(x, min_val=stats["conv1"]["min"], max_val=stats["conv1"]["max"])
     x, scale_next, zero_point_next = quantize_layer(quantized_x.tensor, model.conv1, stats["conv2"], quantized_x.scale, quantized_x.zero_point, 0)
     x = quant_feature(x, min_val=stats["conv1"]["min"], max_val=stats["conv1"]["max"], num_faults= faults_per_layer[0])
-    x = dequantize_tensor(QTensor(tensor=x, scale=scale_next, zero_point=zero_point_next))
+    # x = dequantize_tensor(QTensor(tensor=x, scale=scale_next, zero_point=zero_point_next))
     x = F.max_pool2d(x, 2, 2)
     x, scale_next, zero_point_next = quantize_layer(x, model.conv2, stats["fc"], scale_next, zero_point_next, 0)
     x = quant_feature(x, min_val=stats["conv2"]["min"], max_val=stats["conv2"]["max"], num_faults= faults_per_layer[1])
-    x = dequantize_tensor(QTensor(tensor=x, scale=scale_next, zero_point=zero_point_next))
+    # x = dequantize_tensor(QTensor(tensor=x, scale=scale_next, zero_point=zero_point_next))
     x = F.max_pool2d(x, 2, 2)
     x = x.view(-1, 5*5*16)
     x, scale_next, zero_point_next = quantize_layer(x, model.fc, stats["fc1"], scale_next, zero_point_next, 0)
     x = quant_feature(x, min_val=stats["fc"]["min"], max_val=stats["fc"]["max"], num_faults= faults_per_layer[2])
-    x = dequantize_tensor(QTensor(tensor=x, scale=scale_next, zero_point=zero_point_next))
+    # x = dequantize_tensor(QTensor(tensor=x, scale=scale_next, zero_point=zero_point_next))
     x, scale_next, zero_point_next = quantize_layer(x, model.fc1, stats["fc2"], scale_next, zero_point_next, 0)
     x = quant_feature(x, min_val=stats["fc1"]["min"], max_val=stats["fc1"]["max"], num_faults= faults_per_layer[3])
-    x = dequantize_tensor(QTensor(tensor=x, scale=scale_next, zero_point=zero_point_next))
+    # x = dequantize_tensor(QTensor(tensor=x, scale=scale_next, zero_point=zero_point_next))
     x = model.fc2(x)
     return F.log_softmax(x, dim=1)
 
@@ -253,7 +256,7 @@ def test_quantize(model, test_loader, quant=False, stats=None):
         for data, target in test_loader:
             data, target = data.to(device), target.to(device)
             if quant:
-                output = forward_quantize_fix(model, data, stats)
+                output = forward_quantize_fix(model, data, stats, fault_rate=1e-3)
             else:
                 output = model(data)
             test_loss += F.nll_loss(
