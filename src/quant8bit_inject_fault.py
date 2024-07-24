@@ -344,7 +344,8 @@ if __name__ == "__main__":
                 transforms.Resize((32, 32)),
                 transforms.ToTensor(),
                 transforms.Normalize((0.1325,), (0.3105,))
-            ])
+            ]),
+            download=True,
         ),
         batch_size=64,
         shuffle=True,
@@ -352,19 +353,19 @@ if __name__ == "__main__":
     )
 
     # Gather stats and perform test with quantized model and fault injection
-num_successful_trials = 0
-total_trials = 0
-trial_results = []
+    num_successful_trials = 0
+    total_trials = 0
+    trial_results = []
 
-while num_successful_trials < 100:
-    stats = gather_stats(q_model, test_loader)
-    accuracy = test_quantize(q_model, test_loader, quant=True, stats=stats)
-    trial_results.append((total_trials, accuracy))
-    print(f"Trial {total_trials + 1}: Accuracy = {accuracy:.2f}%")
-    if accuracy <= 88.902:
-        trial_results.append(accuracy)
-        num_successful_trials += 1
-        print(f"Trial (<=88.902) {num_successful_trials}: Accuracy = {accuracy:.2f}%")
-    total_trials += 1
-    # Optional: Save or process trial_results further
-print("Completed 100 successful trials.")
+    while num_successful_trials < 100:
+        stats = gather_stats(q_model, test_loader)
+        accuracy = test_quantize(q_model, test_loader, quant=True, stats=stats)
+        trial_results.append((total_trials, accuracy))
+        print(f"Trial {total_trials + 1}: Accuracy = {accuracy:.2f}%")
+        if accuracy <= 88.902:
+            trial_results.append(accuracy)
+            num_successful_trials += 1
+            print(f"Trial (<=88.902) {num_successful_trials}: Accuracy = {accuracy:.2f}%")
+        total_trials += 1
+        # Optional: Save or process trial_results further
+    print("Completed 100 successful trials.")
