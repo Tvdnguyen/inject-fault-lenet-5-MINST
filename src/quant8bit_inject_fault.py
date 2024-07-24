@@ -1,7 +1,12 @@
 import torch
 import torch.nn.functional as F
 import random
+import time
+import numpy as np
 from collections import namedtuple
+
+# Set seed based on current time to ensure different random values each run
+random.seed(time.time())
 
 QTensor = namedtuple("QTensor", ["tensor", "scale", "zero_point"])
 
@@ -14,21 +19,9 @@ def compute_scale_zero_point(min_val, max_val, num_bits=8):
     zero_point = int(zero_point)
     return scale, zero_point
 
-def inject_faults(q_tensor, fault_rate):
-    num_weights = q_tensor.numel()
-    num_bits = num_weights * 8  # Total number of bits
-    num_faults = int(num_bits * fault_rate)  # Number of bits to flip
 
-    q_tensor_flat = q_tensor.flatten()
-    fault_indices = random.sample(range(num_bits), num_faults)
 
-    for bit_idx in fault_indices:
-        byte_idx = bit_idx // 8
-        bit_in_byte_idx = bit_idx % 8
-        q_tensor_flat[byte_idx] ^= 1 << bit_in_byte_idx
-
-    return q_tensor_flat.view(q_tensor.shape)
-def quantize_tensor(x, num_bits=8, min_val=None, max_val=None, fault_rate=0.1):
+def quantize_tensor(x, num_bits=8, min_val=None, max_val=None):
     if min_val is None or max_val is None:
         min_val, max_val = x.min(), x.max()
 
@@ -37,15 +30,58 @@ def quantize_tensor(x, num_bits=8, min_val=None, max_val=None, fault_rate=0.1):
     q_x.clamp_(0, 2 ** num_bits - 1).round_()
     q_x = q_x.round().byte()
 
-    q_x = inject_faults(q_x, fault_rate)
-
     return QTensor(tensor=q_x, scale=scale, zero_point=zero_point)
+
 
 def dequantize_tensor(q_x):
     return q_x.scale * (q_x.tensor.float() - q_x.zero_point)
 
+def inject_weight_faults(weights, num_faults):
+    num_weights = weights.numel()
+    
+    # Chuyển đổi trọng số sang dạng list để dễ dàng thao tác
+    weights_flat = weights.flatten().tolist()
+    
+    # Tạo danh sách chỉ số
+    indices = list(range(num_weights))
+    
+    # Lặp cho đến khi hết số lỗi cần tiêm hoặc hết chỉ số có thể
+    while num_faults > 0 and indices:
+        # Kiểm tra trước khi chọn để tránh IndexError
+        if not indices:
+            break  # Nếu không còn chỉ số, thoát vòng lặp
+
+        # Chọn ngẫu nhiên một chỉ số từ danh sách chỉ số còn lại
+        i = random.choice(indices)
+        
+        # Tính số bit lỗi sẽ tiêm vào trọng số này
+        num_faults_in_weight = random.randint(1, min(8, num_faults))
+        
+        # Lấy giá trị trọng số hiện tại
+        weight_bits = weights_flat[i]
+        
+        # Chọn ngẫu nhiên vị trí các bit để lật
+        bit_positions = random.sample(range(8), num_faults_in_weight)
+        
+        # Lật các bit tại vị trí đã chọn
+        for pos in bit_positions:
+            weight_bits ^= (1 << pos)
+        
+        # Cập nhật trọng số đã được tiêm lỗi
+        weights_flat[i] = weight_bits
+        
+        # Giảm số lỗi còn lại
+        num_faults -= num_faults_in_weight
+        
+        # Loại bỏ chỉ số đã sử dụng
+        indices.remove(i)
+
+    # Chuyển đổi list trở lại thành tensor và trả về
+    weights = torch.tensor(weights_flat, dtype=torch.uint8).view(weights.shape)
+    return weights
+
 ## Rework Forward pass of Linear and Conv Layers to support Quantisation
-def quantize_layer(x, layer, stat, scale_x, zp_x):
+def quantize_layer(x, layer, stat, scale_x, zp_x, num_faults):
     # for both conv and linear layers
 
     # cache old values
@@ -53,10 +89,15 @@ def quantize_layer(x, layer, stat, scale_x, zp_x):
     B = layer.bias.data
 
     # quantise weights, activations are already quantised
+    #w = quantize_tensor_W(layer.weight.data)
     w = quantize_tensor(layer.weight.data)
     b = quantize_tensor(layer.bias.data)
 
-    layer.weight.data = w.tensor.float()
+   # Inject faults into weights right after quantization
+    w_faulty_tensor = inject_weight_faults(w.tensor, num_faults)  # Get the tensor with faults
+
+
+    layer.weight.data = w_faulty_tensor.float()
     layer.bias.data = b.tensor.float()
 
     # This is Quantisation Artihmetic
@@ -156,30 +197,84 @@ def gather_stats(model, test_loader):
         }
     return final_stats
 
-def forward_quantize(model, x, stats):
+def calculate_total_faults(model, fault_rate):
+    total_weights = sum(param.numel() for param in model.parameters() if param.requires_grad)
+    total_bits = total_weights * 8  # Mỗi trọng số là 8 bits
+    total_faults = int(total_bits * fault_rate)
+    #print(f"Total weight allocated: {total_weights}")
+    #print(f"Total bit allocated: {total_bits}")
+    #print(f"Total faults allocated: {total_faults}")
+    return total_faults
 
-    # Quantise before inputting into incoming layers
-    x = quantize_tensor(x, min_val=stats["conv1"]["min"], max_val=stats["conv1"]["max"])
+def distribute_faults_randomly(total_faults, num_parts=4):
+    faults = np.random.multinomial(total_faults, np.ones(num_parts) / num_parts)
+    return faults.tolist()
+
+
+def forward_quantize_fix(model, x, stats, fault_rate=0.0001):
+    # Tính tổng số bit lỗi từ fault rate
+    total_faults = calculate_total_faults(model, fault_rate)
+    # Phân chia ngẫu nhiên tổng số bit lỗi thành bốn phần
+    faults_per_layer = distribute_faults_randomly(total_faults, num_parts=4)
+
+    #print(f"Faults per layer: {faults_per_layer}")
+
+    # Lượng tử hóa trước khi đưa vào các lớp tiếp theo
+    quantized_x = quantize_tensor(x, min_val=stats["conv1"]["min"], max_val=stats["conv1"]["max"])
 
     x, scale_next, zero_point_next = quantize_layer(
-        x.tensor, model.conv1, stats["conv2"], x.scale, x.zero_point
+        quantized_x.tensor, model.conv1, stats["conv2"], quantized_x.scale, quantized_x.zero_point, faults_per_layer[0]
     )
     x = F.max_pool2d(x, 2, 2)
 
     x, scale_next, zero_point_next = quantize_layer(
-        x, model.conv2, stats["fc"], scale_next, zero_point_next
+        x, model.conv2, stats["fc"], scale_next, zero_point_next, faults_per_layer[1]
     )
     x = F.max_pool2d(x, 2, 2)
 
     x = x.view(-1, 5*5*16)
 
     x, scale_next, zero_point_next = quantize_layer(
-        x, model.fc, stats["fc1"], scale_next, zero_point_next
+        x, model.fc, stats["fc1"], scale_next, zero_point_next, faults_per_layer[2]
     )
 
     x, scale_next, zero_point_next = quantize_layer(
-        x, model.fc1, stats["fc2"], scale_next, zero_point_next
+        x, model.fc1, stats["fc2"], scale_next, zero_point_next, faults_per_layer[3]
     )
+
+    # Chuyển đổi ngược tensor lượng tử hóa cuối cùng để lấy kết quả dạng float
+    x = dequantize_tensor(
+        QTensor(tensor=x, scale=scale_next, zero_point=zero_point_next)
+    )
+
+    x = model.fc2(x)
+
+    return F.log_softmax(x, dim=1)
+
+def forward_quantize(model, x, stats, fault_rate):
+
+    # Quantise before inputting into incoming layers
+    x = quantize_tensor(x, min_val=stats["conv1"]["min"], max_val=stats["conv1"]["max"])
+
+    x, scale_next, zero_point_next = quantize_layer(
+        x.tensor, model.conv1, stats["conv2"], x.scale, x.zero_point
+    , num_faults)
+    x = F.max_pool2d(x, 2, 2)
+
+    x, scale_next, zero_point_next = quantize_layer(
+        x, model.conv2, stats["fc"], scale_next, zero_point_next
+    ,num_faults)
+    x = F.max_pool2d(x, 2, 2)
+
+    x = x.view(-1, 5*5*16)
+
+    x, scale_next, zero_point_next = quantize_layer(
+        x, model.fc, stats["fc1"], scale_next, zero_point_next
+    ,num_faults)
+
+    x, scale_next, zero_point_next = quantize_layer(
+        x, model.fc1, stats["fc2"], scale_next, zero_point_next
+    , num_faults)
 
     # Back to dequant for final layer
     x = dequantize_tensor(
@@ -189,6 +284,7 @@ def forward_quantize(model, x, stats):
     x = model.fc2(x)
 
     return F.log_softmax(x, dim=1)
+
 
 def test_quantize(model, test_loader, quant=False, stats=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -200,7 +296,7 @@ def test_quantize(model, test_loader, quant=False, stats=None):
         for data, target in test_loader:
             data, target = data.to(device), target.to(device)
             if quant:
-                output = forward_quantize(model, data, stats)
+                output = forward_quantize_fix(model, data, stats)
             else:
                 output = model(data)
             test_loss += F.nll_loss(
@@ -213,14 +309,16 @@ def test_quantize(model, test_loader, quant=False, stats=None):
 
     test_loss /= len(test_loader.dataset)
 
-    print(
-        "\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n".format(
-            test_loss,
-            correct,
-            len(test_loader.dataset),
-            100.0 * correct / len(test_loader.dataset),
-        )
-    )
+    #print(
+    #    "\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.2f}%)\n".format(
+    #        test_loss,
+    #        correct,
+    #        len(test_loader.dataset),
+    #        100.0 * correct / len(test_loader.dataset),
+    #    )
+    #)
+    accuracy = 100.0 * correct / len(test_loader.dataset)
+    return accuracy
 
 # Example usage with a simple model (assuming a model and dataset are defined)
 if __name__ == "__main__":
@@ -254,5 +352,19 @@ if __name__ == "__main__":
     )
 
     # Gather stats and perform test with quantized model and fault injection
+num_successful_trials = 0
+total_trials = 0
+trial_results = []
+
+while num_successful_trials < 100:
     stats = gather_stats(q_model, test_loader)
-    test_quantize(q_model, test_loader, quant=True, stats=stats)
+    accuracy = test_quantize(q_model, test_loader, quant=True, stats=stats)
+    trial_results.append((total_trials, accuracy))
+    print(f"Trial {total_trials + 1}: Accuracy = {accuracy:.2f}%")
+    if accuracy <= 88.902:
+        trial_results.append(accuracy)
+        num_successful_trials += 1
+        print(f"Trial (<=88.902) {num_successful_trials}: Accuracy = {accuracy:.2f}%")
+    total_trials += 1
+    # Optional: Save or process trial_results further
+print("Completed 100 successful trials.")
